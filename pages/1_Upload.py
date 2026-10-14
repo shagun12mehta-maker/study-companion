@@ -1,146 +1,533 @@
+
 import sys
+import io
 from pathlib import Path
 from datetime import datetime
+from pptx import Presentation
+from docx import Document
+
 import streamlit as st
+from pypdf import PdfReader
 
-# Ensure repository root is on sys.path for shared imports
-root_path = Path(__file__).resolve().parent.parent
-if str(root_path) not in sys.path:
-    sys.path.insert(0, str(root_path))
+# --------------------------------------------------
+# 1. Project path and imports
+# --------------------------------------------------
 
-from study_data import init_session_state, format_file_size, AVAILABLE_TOPICS
+ROOT_DIR = Path(__file__).resolve().parent.parent
+
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
+from study_data import init_session_state, AVAILABLE_TOPICS
+
+
+# --------------------------------------------------
+# 2. Page configuration
+# --------------------------------------------------
 
 st.set_page_config(
-    page_title="Study Materials | AI Study Companion",
-    page_icon="📤",
+    page_title="Upload Study Material",
+    page_icon="📚",
     layout="wide"
 )
 
 init_session_state()
 
-# --- Page styling ---
-st.markdown("""
-<style>
-.page-title {
-    font-size: 2rem;
-    font-weight: 700;
-    color: #1e293b;
-    margin-bottom: 0.2rem;
-}
-.page-subtitle {
-    font-size: 1.05rem;
-    color: #64748b;
-    margin-bottom: 1.5rem;
-}
-.upload-card-wrapper {
-    background: #ffffff;
-    padding: 24px;
-    border-radius: 14px;
-    border: 1px dashed #cbd5e1;
-    margin-bottom: 1.5rem;
-}
-.doc-item {
-    background: #ffffff;
-    border: 1px solid #e2e8f0;
-    border-radius: 12px;
-    padding: 16px 20px;
-    margin-bottom: 12px;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-}
-.badge-ready {
-    background-color: #dcfce7;
-    color: #15803d;
-    padding: 4px 10px;
-    border-radius: 999px;
-    font-size: 0.82rem;
-    font-weight: 600;
-}
-</style>
-""", unsafe_allow_html=True)
 
-# --- Header ---
-st.markdown('<div class="page-title">📤 Study Materials & Notes</div>', unsafe_allow_html=True)
-st.markdown(
-    '<div class="page-subtitle">Upload your course lecture slides and reference notes to build your personal knowledge base.</div>',
-    unsafe_allow_html=True
+# --------------------------------------------------
+# 3. Initialize uploaded materials
+# --------------------------------------------------
+
+if "uploaded_materials" not in st.session_state:
+    st.session_state["uploaded_materials"] = []
+
+if "sample_materials_initialized" not in st.session_state:
+    st.session_state["uploaded_materials"] = [
+        {
+            "id": "sample_doc_1",
+            "name": "Data_Structures_Lecture_Notes.pdf",
+            "size_kb": 0,
+            "upload_time": "Demo",
+            "topic": "Data Structures",
+            "tag": "Sample",
+            "page_count": 0,
+            "extracted_text": "",
+            "page_records": [],
+            "file_bytes": None,
+            "status": "Demo Sample"
+        },
+        {
+            "id": "sample_doc_2",
+            "name": "Operating_Systems_Chapter_4.pptx",
+            "size_kb": 0,
+            "upload_time": "Demo",
+            "topic": "Operating Systems",
+            "tag": "Sample",
+            "page_count": 0,
+            "extracted_text": "",
+            "page_records": [],
+            "file_bytes": None,
+            "status": "Demo Sample"
+        }
+    ]
+
+    st.session_state["sample_materials_initialized"] = True
+
+
+# --------------------------------------------------
+# 4. Page heading
+# --------------------------------------------------
+
+st.title("📚 Upload Study Material")
+
+st.write(
+    "Upload your study files to prepare them for "
+    "source-grounded learning."
 )
 
-student_name = st.session_state.get("student_name", "Student")
-st.caption(f"Currently managing library for **{student_name}**")
-st.divider()
+st.info(
+    "PDF, TXT, PPTX and DOCX files support text extraction. "
+    "Old PPT files must first be converted to PPTX."
+)
 
-# --- File Uploader Section ---
-col_upload, col_meta = st.columns([2, 1], gap="medium")
 
-with col_upload:
-    uploaded_file = st.file_uploader(
-        "Choose lecture slides or notes",
-        type=["pdf", "pptx", "ppt", "txt", "docx"],
-        help="Upload files up to 50MB. Text will be parsed and indexed for tutor reference."
+# --------------------------------------------------
+# 5. Upload form
+# --------------------------------------------------
+
+uploaded_file = st.file_uploader(
+    "Choose a study file",
+    type=["pdf", "pptx", "ppt", "txt", "docx"],
+    help="Supported extraction: PDF, TXT, PPTX and DOCX."
+)
+
+col1, col2 = st.columns(2)
+
+with col1:
+    selected_topic = st.selectbox(
+        "Select Topic",
+        AVAILABLE_TOPICS
     )
 
-with col_meta:
-    doc_topic = st.selectbox("Associated Topic", AVAILABLE_TOPICS)
-    doc_notes = st.text_input("Optional Tag / Chapter", placeholder="e.g. Chapter 3, Midterm Review")
+with col2:
+    selected_tag = st.text_input(
+        "Add a tag (optional)",
+        placeholder="e.g. Unit 1, Important Notes"
+    )
 
-# Process uploaded file into session state
-if uploaded_file is not None:
-    # Check if file is already added to prevent duplicate appends
-    existing_names = [d["name"] for d in st.session_state["uploaded_materials"]]
-    if uploaded_file.name not in existing_names:
-        new_doc = {
-            "id": f"doc_{len(st.session_state['uploaded_materials']) + 1}",
-            "name": uploaded_file.name,
-            "size_kb": round(uploaded_file.size / 1024, 1),
-            "upload_time": datetime.now().strftime("%b %d, %I:%M %p"),
-            "topic": doc_topic,
-            "tag": doc_notes.strip() if doc_notes else "General",
-            "page_count": max(1, int(uploaded_file.size / (1024 * 45))), # Approximate page estimate
-            "status": "Indexed"
-        }
-        st.session_state["uploaded_materials"].append(new_doc)
-        st.success(f"Successfully added **{uploaded_file.name}** ({format_file_size(uploaded_file.size)}) to your library!")
+
+# --------------------------------------------------
+# 6. Process uploaded file
+# --------------------------------------------------
+
+if st.button(
+    "⚙️ Process File",
+    type="primary",
+    use_container_width=True
+):
+
+    if uploaded_file is None:
+        st.warning("Please upload a file first.")
+
     else:
-        st.info(f"**{uploaded_file.name}** is already in your study library.")
+        file_name = uploaded_file.name
+        file_extension = Path(file_name).suffix.lower()
+        original_file_bytes = uploaded_file.getvalue()
 
-# --- Document Library View ---
-st.write("")
-st.subheader("📚 Your Indexed Library")
+        extracted_text = ""
+        page_records = []
+        page_count = 0
+        status = "Extraction unavailable"
 
-materials = st.session_state.get("uploaded_materials", [])
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+
+        try:
+
+            # ------------------------------------------
+            # PDF extraction
+            # ------------------------------------------
+
+            if file_extension == ".pdf":
+
+                status_text.write("Opening PDF...")
+
+                pdf_reader = PdfReader(
+                    io.BytesIO(original_file_bytes)
+                )
+
+                page_count = len(pdf_reader.pages)
+                all_pages_text = []
+
+                for index, page in enumerate(pdf_reader.pages):
+
+                    page_number = index + 1
+
+                    status_text.write(
+                        f"Processing PDF page "
+                        f"{page_number} of {page_count}..."
+                    )
+
+                    page_text = page.extract_text() or ""
+
+                    page_records.append({
+                        "page_number": page_number,
+                        "text": page_text
+                    })
+
+                    all_pages_text.append(
+                        f"--- Page {page_number} ---\n{page_text}"
+                    )
+
+                    progress_bar.progress(
+                        int(page_number / max(page_count, 1) * 100)
+                    )
+
+                extracted_text = "\n\n".join(all_pages_text)
+
+                status = (
+                    "Extracted"
+                    if extracted_text.strip()
+                    else "No text found"
+                )
+
+            # ------------------------------------------
+            # TXT extraction
+            # ------------------------------------------
+
+            elif file_extension == ".txt":
+
+                status_text.write("Reading text file...")
+
+                extracted_text = original_file_bytes.decode(
+                    "utf-8",
+                    errors="replace"
+                )
+
+                page_records.append({
+                    "page_number": 1,
+                    "text": extracted_text
+                })
+
+                page_count = 1
+                progress_bar.progress(100)
+
+                status = (
+                    "Extracted"
+                    if extracted_text.strip()
+                    else "No text found"
+                )
+
+            # ------------------------------------------
+            # PPTX extraction
+            # ------------------------------------------
+
+            elif file_extension == ".pptx":
+
+                from pptx import Presentation
+
+                status_text.write("Opening PowerPoint presentation...")
+
+                presentation = Presentation(
+                    io.BytesIO(original_file_bytes)
+                )
+
+                page_count = len(presentation.slides)
+                all_slides_text = []
+
+                for index, slide in enumerate(presentation.slides):
+
+                    slide_number = index + 1
+                    slide_parts = []
+
+                    status_text.write(
+                        f"Processing slide {slide_number} "
+                        f"of {page_count}..."
+                    )
+
+                    for shape in slide.shapes:
+
+                        # Text boxes and ordinary text shapes
+                        if getattr(shape, "has_text_frame", False):
+                            shape_text = shape.text.strip()
+
+                            if shape_text:
+                                slide_parts.append(shape_text)
+
+                        # Tables inside slides
+                        if getattr(shape, "has_table", False):
+                            for row in shape.table.rows:
+                                cells = [
+                                    cell.text.strip()
+                                    for cell in row.cells
+                                ]
+
+                                if any(cells):
+                                    slide_parts.append(
+                                        " | ".join(cells)
+                                    )
+
+                    slide_text = "\n".join(slide_parts)
+
+                    page_records.append({
+                        "page_number": slide_number,
+                        "text": slide_text
+                    })
+
+                    all_slides_text.append(
+                        f"--- Page {slide_number} ---\n{slide_text}"
+                    )
+
+                    progress_bar.progress(
+                        int(slide_number / max(page_count, 1) * 100)
+                    )
+
+                extracted_text = "\n\n".join(all_slides_text)
+
+                status = (
+                    "Extracted"
+                    if extracted_text.strip()
+                    else "No text found"
+                )
+
+            # ------------------------------------------
+            # DOCX extraction
+            # ------------------------------------------
+
+            elif file_extension == ".docx":
+
+                from docx import Document
+
+                status_text.write("Reading Word document...")
+
+                document = Document(
+                    io.BytesIO(original_file_bytes)
+                )
+
+                text_parts = []
+
+                total_items = (
+                    len(document.paragraphs)
+                    + len(document.tables)
+                )
+
+                total_items = max(total_items, 1)
+                processed_items = 0
+
+                # Extract paragraphs
+                for paragraph in document.paragraphs:
+
+                    paragraph_text = paragraph.text.strip()
+
+                    if paragraph_text:
+                        text_parts.append(paragraph_text)
+
+                    processed_items += 1
+
+                    progress_bar.progress(
+                        min(
+                            int(processed_items / total_items * 100),
+                            100
+                        )
+                    )
+
+                    status_text.write(
+                        f"Processing Word content "
+                        f"{processed_items} of {total_items}..."
+                    )
+
+                # Extract tables
+                for table in document.tables:
+
+                    for row in table.rows:
+                        cells = [
+                            cell.text.strip()
+                            for cell in row.cells
+                        ]
+
+                        if any(cells):
+                            text_parts.append(" | ".join(cells))
+
+                    processed_items += 1
+
+                    progress_bar.progress(
+                        min(
+                            int(processed_items / total_items * 100),
+                            100
+                        )
+                    )
+
+                extracted_text = "\n".join(text_parts)
+
+                # DOCX does not provide reliable page boundaries
+                # through python-docx, so save the text as one section.
+                page_records.append({
+                    "page_number": 1,
+                    "text": extracted_text
+                })
+
+                page_count = 1
+
+                status = (
+                    "Extracted"
+                    if extracted_text.strip()
+                    else "No text found"
+                )
+
+            # ------------------------------------------
+            # Old PPT format
+            # ------------------------------------------
+
+            elif file_extension == ".ppt":
+
+                status = "Convert PPT to PPTX"
+
+                st.warning(
+                    "This is an older .ppt file. "
+                    "Open it in PowerPoint and use Save As → "
+                    "PowerPoint Presentation (.pptx), then upload it again."
+                )
+
+            # ------------------------------------------
+            # Save file details
+            # ------------------------------------------
+
+            new_doc = {
+                "id": (
+                    f"doc_{datetime.now().strftime('%Y%m%d%H%M%S%f')}"
+                ),
+                "name": file_name,
+                "size_kb": round(
+                    len(original_file_bytes) / 1024, 2
+                ),
+                "upload_time": datetime.now().strftime(
+                    "%d-%m-%Y %H:%M"
+                ),
+                "topic": selected_topic,
+                "tag": selected_tag.strip() or "General",
+                "page_count": page_count,
+                "extracted_text": extracted_text,
+                "page_records": page_records,
+
+                # Keep original bytes for supported source viewing
+                "file_bytes": (
+                    original_file_bytes
+                    if file_extension in [".pdf", ".pptx", ".docx", ".txt"]
+                    else None
+                ),
+
+                "status": status
+            }
+
+            # Avoid adding an unsupported PPT file as a processed document
+            if file_extension != ".ppt":
+                st.session_state["uploaded_materials"].append(new_doc)
+
+            progress_bar.progress(100)
+            status_text.empty()
+
+            if status == "Extracted":
+                st.success(
+                    f"✅ {file_name} processed successfully!"
+                )
+
+            elif status == "No text found":
+                st.warning(
+                    "The file was added, but no readable text "
+                    "was extracted. Scanned PDFs and image-only "
+                    "slides may need OCR."
+                )
+
+            elif status == "Convert PPT to PPTX":
+                st.info("Convert the file to PPTX and upload it again.")
+
+            st.rerun()
+
+        except ImportError as error:
+            progress_bar.empty()
+            status_text.empty()
+
+            st.error(
+                "A required library is missing. Install the libraries "
+                "using the commands shown below, then restart Streamlit."
+            )
+
+        except Exception as error:
+            progress_bar.empty()
+            status_text.empty()
+
+            st.error(f"File processing failed: {error}")
+
+
+# --------------------------------------------------
+# 7. Show uploaded materials
+# --------------------------------------------------
+
+st.divider()
+st.subheader("📂 Your Study Materials")
+
+materials = st.session_state["uploaded_materials"]
 
 if not materials:
-    st.info("Your library is currently empty. Upload your first course note above to get started!")
+    st.info("No study materials added yet.")
+
 else:
-    st.write(f"Showing **{len(materials)}** active study documents:")
+    st.caption(f"Total files: {len(materials)}")
 
-    # Render each document with metadata and management actions
-    for index, doc in enumerate(materials):
-        with st.container():
-            c1, c2, c3, c4 = st.columns([3, 2, 2, 1])
-            with c1:
-                st.markdown(f"📄 **{doc['name']}**")
-                st.caption(f"Topic: {doc.get('topic', 'General')} • {doc.get('tag', '')}")
-            with c2:
-                st.write(f"Size: `{doc['size_kb']} KB` (~{doc.get('page_count', 1)} pages)")
-                st.caption(f"Added: {doc.get('upload_time', 'Recently')}")
-            with c3:
-                st.markdown('<span class="badge-ready">✓ Ready for Tutor</span>', unsafe_allow_html=True)
-            with c4:
-                # Remove button per item
-                if st.button("Delete", key=f"del_doc_{index}", help="Remove from library"):
-                    st.session_state["uploaded_materials"].pop(index)
-                    st.rerun()
-            st.divider()
+    for index, material in enumerate(materials):
 
-# Quick action shortcut
-st.write("")
-col_cta1, col_cta2 = st.columns(2)
-with col_cta1:
-    if st.button("💬 Ask AI Tutor About These Notes", use_container_width=True):
-        st.switch_page("pages/2_Chat.py")
-with col_cta2:
-    if st.button("📝 Generate Quiz From This Material", use_container_width=True):
-        st.switch_page("pages/3_Quiz.py")
+        with st.expander(
+            f"📄 {material['name']} — {material['status']}",
+            expanded=False
+        ):
+
+            col1, col2 = st.columns(2)
+
+            with col1:
+                st.write(f"**Topic:** {material['topic']}")
+                st.write(f"**Tag:** {material['tag']}")
+                st.write(f"**Size:** {material['size_kb']} KB")
+
+            with col2:
+                st.write(f"**Pages/Sections:** {material['page_count']}")
+                st.write(f"**Uploaded:** {material['upload_time']}")
+                st.write(f"**Status:** {material['status']}")
+
+            if material.get("extracted_text", "").strip():
+
+                st.markdown("**Extracted Text Preview**")
+
+                st.text(material["extracted_text"][:2000])
+
+                if len(material["extracted_text"]) > 2000:
+                    st.caption(
+                        "Preview limited to the first 2,000 characters."
+                    )
+
+                with st.expander("View page-wise or slide-wise text"):
+                    for page in material.get("page_records", []):
+
+                        st.markdown(
+                            f"**Page/Slide {page['page_number']}**"
+                        )
+
+                        st.text(
+                            page.get("text", "")[:1500]
+                            or "No readable text on this page or slide."
+                        )
+
+            if (
+                material["name"].lower().endswith(".pdf")
+                and material.get("file_bytes")
+            ):
+                st.success(
+                    "Original PDF is saved in this session "
+                    "for the Source Viewer."
+                )
+
+            if st.button(
+                "🗑️ Delete File",
+                key=f"delete_{material['id']}"
+            ):
+                st.session_state["uploaded_materials"].pop(index)
+                st.rerun()
