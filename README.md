@@ -117,8 +117,7 @@ Open `http://localhost:8501` in your browser.
 
 ---
 
-## 👥 Authors & Team
+## 👤 Author
 - **Shagun Mehta** ([shagun12mehta-maker](https://github.com/shagun12mehta-maker))
-- **Mustafa** ([mustafa64-stack](https://github.com/mustafa64-stack))
 
 *Track D: Personalized Tutoring & Adaptive Learning — Multimodal AI Hackathon 2026*
