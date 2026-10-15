@@ -9,8 +9,8 @@ load_dotenv()
 
 API_KEY = os.getenv("GEMINI_API_KEY")
 
-# Apne Gemini account mein available model ka naam use karo.
-MODEL_NAME = "gemini-3.8-flash"
+# Use the reliable Flash model
+MODEL_NAME = os.getenv("GEMINI_FLASH_MODEL", "gemini-flash-latest")
 
 
 # --------------------------------------------------

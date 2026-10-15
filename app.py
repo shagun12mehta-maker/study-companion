@@ -125,6 +125,7 @@ st.sidebar.page_link("pages/1_Upload.py", label="Study Material", icon="📤")
 st.sidebar.page_link("pages/2_Chat.py", label="AI Tutor Chat", icon="💬")
 st.sidebar.page_link("pages/3_Quiz.py", label="Practice Quiz", icon="📝")
 st.sidebar.page_link("pages/4_Dashboard.py", label="Analytics Dashboard", icon="📊")
+st.sidebar.page_link("pages/5_Knowledge_Base.py", label="Knowledge Base & Ontology", icon="📚")
 
 st.sidebar.divider()
 st.sidebar.metric("🔥 Study Streak", f"{streak_days} days")

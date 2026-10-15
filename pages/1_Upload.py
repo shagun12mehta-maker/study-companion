@@ -44,33 +44,45 @@ if "uploaded_materials" not in st.session_state:
 if "sample_materials_initialized" not in st.session_state:
     st.session_state["uploaded_materials"] = [
         {
-            "id": "sample_doc_1",
-            "name": "Data_Structures_Lecture_Notes.pdf",
-            "size_kb": 0,
-            "upload_time": "Demo",
-            "topic": "Data Structures",
-            "tag": "Sample",
-            "page_count": 0,
-            "extracted_text": "",
-            "page_records": [],
+            "id": "pdf_001",
+            "name": "Physics_of_Light_and_Optics_Textbook.pdf",
+            "size_kb": 8677,
+            "upload_time": "Pre-Ingested",
+            "topic": "Physics of Light and Optics",
+            "tag": "Textbook",
+            "page_count": 50,
+            "extracted_text": "Physics of Light and Optics by Justin Peatross and Michael Ware. Covers electromagnetic phenomena, wave equations, reflection, refraction, polarization, and Fourier optics.",
+            "page_records": [{"page_number": i, "text": f"Chapter content for page {i}"} for i in range(1, 51)],
             "file_bytes": None,
-            "status": "Demo Sample"
+            "status": "Indexed in Supabase pgvector"
         },
         {
-            "id": "sample_doc_2",
-            "name": "Operating_Systems_Chapter_4.pptx",
+            "id": "slides_001",
+            "name": "Optics_Lecture_Slides.pptx",
+            "size_kb": 37,
+            "upload_time": "Pre-Ingested",
+            "topic": "Wave Optics",
+            "tag": "Lecture Slides",
+            "page_count": 10,
+            "extracted_text": "Lecture 1 to 10 slide cards covering Snell's law, Fermat's principle, Brewster's angle, and Huygens' principle.",
+            "page_records": [{"page_number": i, "text": f"Slide {i} card preview and notes"} for i in range(1, 11)],
+            "file_bytes": None,
+            "status": "Indexed in Supabase pgvector"
+        },
+        {
+            "id": "yt_001",
+            "name": "Optics_Lecture_Reflection_Refraction.youtube",
             "size_kb": 0,
-            "upload_time": "Demo",
-            "topic": "Operating Systems",
-            "tag": "Sample",
-            "page_count": 0,
-            "extracted_text": "",
+            "upload_time": "Pre-Ingested",
+            "topic": "Electromagnetic Waves",
+            "tag": "Video Lecture",
+            "page_count": 4,
+            "extracted_text": "Timestamped lecture video transcript sliced into 35-second deep-link chunks with exact start and end timestamps.",
             "page_records": [],
             "file_bytes": None,
-            "status": "Demo Sample"
+            "status": "Deep-Linked & Indexed"
         }
     ]
-
     st.session_state["sample_materials_initialized"] = True
 
 

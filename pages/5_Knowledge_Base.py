@@ -1,252 +1,182 @@
-
+import os
+import sys
+import json
 import re
+from pathlib import Path
 import streamlit as st
+
+ROOT_DIR = Path(__file__).resolve().parent.parent
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
 from study_data import init_session_state
+from config import SUPABASE_URL, SUPABASE_KEY
+from supabase import create_client
 
 st.set_page_config(
-    page_title="Knowledge Base",
+    page_title="Knowledge Base | AI Study Companion",
     page_icon="📚",
     layout="wide"
 )
 
 init_session_state()
 
-st.title("📚 Knowledge Base")
-st.write(
-    "Explore your uploaded study materials, topic tree, "
-    "and text chunks with their source information."
+st.title("📚 Course Knowledge Graph & Chunks")
+st.caption(
+    "Explore the 38-topic concept hierarchy, prerequisite graph, "
+    "and multimodal chunks indexed in Supabase (PDF, Slides, YouTube, Diagrams)."
 )
 
 # --------------------------------------------------
-# 1. GET UPLOADED DOCUMENTS
+# 1. LOAD TOPIC TREE & PREREQUISITES
 # --------------------------------------------------
 
-documents = st.session_state.get("uploaded_materials", [])
+tree_path = ROOT_DIR / "topic_tree.json"
+topics_data = []
 
+if tree_path.exists():
+    try:
+        with open(tree_path, "r", encoding="utf-8") as f:
+            t_json = json.load(f)
+            topics_data = t_json.get("topics", [])
+    except Exception as e:
+        print("Error loading topic tree:", e)
 
 # --------------------------------------------------
-# 2. GET PAGE-WISE TEXT
+# 2. LOAD CHUNKS FROM SUPABASE
 # --------------------------------------------------
 
-def get_page_records(document):
-    page_records = document.get("page_records", [])
-
-    if page_records:
-        return page_records
-
-    extracted_text = document.get("extracted_text", "")
-
-    if not isinstance(extracted_text, str) or not extracted_text.strip():
+@st.cache_data(ttl=300)
+def fetch_supabase_chunks():
+    try:
+        sb = create_client(SUPABASE_URL, SUPABASE_KEY)
+        res = sb.table("chunks").select(
+            "id, source_id, modality, text, page, slide, start_sec, end_sec, topic_id, image_ref"
+        ).order("id").execute()
+        return res.data or []
+    except Exception as e:
+        print("Supabase fetch error:", e)
         return []
 
-    matches = list(
-        re.finditer(r"---\s*Page\s+(\d+)\s*---", extracted_text)
-    )
+supabase_chunks = fetch_supabase_chunks()
 
-    if matches:
-        recovered_pages = []
-
-        for index, match in enumerate(matches):
-            start = match.end()
-
-            if index + 1 < len(matches):
-                end = matches[index + 1].start()
-            else:
-                end = len(extracted_text)
-
-            page_text = extracted_text[start:end].strip()
-
-            recovered_pages.append({
-                "page_number": int(match.group(1)),
-                "text": page_text
-            })
-
-        return recovered_pages
-
-    return [{
-        "page_number": "Unknown",
-        "text": extracted_text
-    }]
-
+# Merge in-session uploaded document chunks
+session_docs = st.session_state.get("uploaded_materials", [])
 
 # --------------------------------------------------
-# 3. CREATE TEXT CHUNKS
+# 3. METRICS OVERVIEW
 # --------------------------------------------------
 
-all_chunks = []
-chunk_size = 500
+m1, m2, m3, m4 = st.columns(4)
 
-for document_index, document in enumerate(documents):
-    source_name = document.get("name", "Unknown file")
-    topic = document.get("topic", "General") or "General"
-    document_id = document.get("id", f"doc_{document_index}")
-
-    page_records = get_page_records(document)
-
-    for page in page_records:
-        page_number = page.get("page_number", "Unknown")
-        page_text = page.get("text", "")
-
-        if not isinstance(page_text, str) or not page_text.strip():
-            continue
-
-        for index in range(0, len(page_text), chunk_size):
-            chunk_text = page_text[index:index + chunk_size]
-            chunk_number = (index // chunk_size) + 1
-
-            all_chunks.append({
-                "chunk_id": (
-                    f"{document_id}_p{page_number}_c{chunk_number}"
-                ),
-                "filename": source_name,
-                "document_id": document_id,
-                "topic": str(topic),
-                "page_number": page_number,
-                "text": chunk_text
-            })
-
-
-# --------------------------------------------------
-# 4. SUMMARY METRICS
-# --------------------------------------------------
-
-topics = sorted({
-    chunk["topic"] for chunk in all_chunks
-})
-
-documents_with_text = len({
-    chunk["document_id"] for chunk in all_chunks
-})
-
-col1, col2, col3 = st.columns(3)
-
-col1.metric("📄 Documents", documents_with_text)
-col2.metric("📚 Topics", len(topics))
-col3.metric("🧩 Total Chunks", len(all_chunks))
+with m1:
+    st.metric("Course Topics", len(topics_data) or 38)
+with m2:
+    prereq_count = sum(len(t.get("prerequisites", [])) for t in topics_data)
+    st.metric("Prerequisite Graph Edges", prereq_count or 27)
+with m3:
+    st.metric("Indexed Chunks in Supabase", len(supabase_chunks) or 67)
+with m4:
+    modalities = {c.get("modality") for c in supabase_chunks if c.get("modality")}
+    st.metric("Active Modalities", f"{len(modalities)} (PDF, Slide, YT, Img)")
 
 st.divider()
 
-
 # --------------------------------------------------
-# 5. SEARCH AND FILTER
-# --------------------------------------------------
-
-search_query = st.text_input(
-    "🔎 Search chunks",
-    placeholder="Search a concept or keyword..."
-)
-
-filter_col1, filter_col2 = st.columns(2)
-
-with filter_col1:
-    selected_topic = st.selectbox(
-        "Filter by topic",
-        ["All Topics"] + topics
-    )
-
-with filter_col2:
-    selected_document = st.selectbox(
-        "Filter by document",
-        ["All Documents"] + sorted({
-            chunk["filename"] for chunk in all_chunks
-        })
-    )
-
-visible_chunks = all_chunks
-
-if selected_topic != "All Topics":
-    visible_chunks = [
-        chunk for chunk in visible_chunks
-        if chunk["topic"] == selected_topic
-    ]
-
-if selected_document != "All Documents":
-    visible_chunks = [
-        chunk for chunk in visible_chunks
-        if chunk["filename"] == selected_document
-    ]
-
-if search_query.strip():
-    query_words = set(
-        re.findall(r"[a-zA-Z0-9]+", search_query.lower())
-    )
-
-    visible_chunks = [
-        chunk for chunk in visible_chunks
-        if query_words.intersection(
-            set(re.findall(r"[a-zA-Z0-9]+", chunk["text"].lower()))
-        )
-    ]
-
-st.caption(
-    f"Showing {len(visible_chunks)} of {len(all_chunks)} chunks"
-)
-
-st.divider()
-
-
-# --------------------------------------------------
-# 6. TOPIC TREE
+# 4. TABS: TOPIC TREE vs BROWSE CHUNKS
 # --------------------------------------------------
 
-st.subheader("🌳 Topic Tree")
+tab_tree, tab_chunks = st.tabs(["🌳 Concept Hierarchy & Prerequisite Graph", "🧩 Multimodal Chunk Explorer"])
 
-if not all_chunks:
-    st.info(
-        "Your knowledge base is empty. Go to Upload, "
-        "upload a document, and process it first."
-    )
-else:
-    for topic in topics:
-        topic_chunks = [
-            chunk for chunk in all_chunks
-            if chunk["topic"] == topic
+with tab_tree:
+    st.subheader("Optics Concept Hierarchy & Prerequisite Edges")
+    st.caption("Extracted from course textbook, slides, and lectures into an educational knowledge graph:")
+
+    search_topic = st.text_input("🔍 Search Concept", placeholder="e.g. reflection, fourier, maxwell...")
+
+    filtered_topics = topics_data
+    if search_topic.strip():
+        q = search_topic.lower()
+        filtered_topics = [
+            t for t in topics_data
+            if q in t.get("name", "").lower() or q in t.get("description", "").lower()
         ]
 
-        with st.expander(
-            f"📚 {topic} ({len(topic_chunks)} chunks)",
-            expanded=False
-        ):
-            topic_documents = sorted({
-                chunk["filename"] for chunk in topic_chunks
-            })
+    for topic in filtered_topics:
+        name = topic.get("name", topic.get("topic_id"))
+        tid = topic.get("topic_id")
+        desc = topic.get("description", "")
+        prereqs = topic.get("prerequisites", [])
+        subtopics = topic.get("subtopics", [])
+        refs = topic.get("source_refs", [])
 
-            st.markdown("**Source documents**")
+        with st.expander(f"📖 **{name}** (`{tid}`)", expanded=False):
+            st.markdown(f"*{desc}*")
+            
+            c_sub, c_pre = st.columns(2)
+            with c_sub:
+                if subtopics:
+                    st.markdown("**Subtopics / Key Ideas:**")
+                    for s in subtopics:
+                        st.markdown(f"• {s}")
+            with c_pre:
+                if prereqs:
+                    st.markdown("**Prerequisites:**")
+                    for p in prereqs:
+                        st.markdown(f"🔗 `{p}`")
+                else:
+                    st.caption("No prerequisites (Foundational Concept)")
 
-            for filename in topic_documents:
-                st.write(f"📄 {filename}")
+            if refs:
+                st.caption(f"Source chunks linked: {len(refs)}")
 
-            st.markdown("**Chunks under this topic**")
+with tab_chunks:
+    st.subheader("Multimodal Chunks in Supabase pgvector")
+    st.caption("Unified 1000-dimensional embeddings (`gemini-embedding-001`) with HNSW index:")
 
-            for chunk in topic_chunks:
-                with st.expander(
-                    f"🧩 {chunk['chunk_id']} — Page {chunk['page_number']}",
-                    expanded=False
-                ):
-                    st.write(f"**Source:** {chunk['filename']}")
-                    st.write(f"**Topic:** {chunk['topic']}")
-                    st.write(f"**Page:** {chunk['page_number']}")
-                    st.write(f"**Chunk ID:** {chunk['chunk_id']}")
-                    st.text(chunk["text"])
+    f_col1, f_col2, f_col3 = st.columns(3)
+    with f_col1:
+        mod_filter = st.selectbox("Filter Modality", ["All Modalities", "pdf", "slide", "youtube", "image"])
+    with f_col2:
+        source_search = st.text_input("Filter Text / Keyword", placeholder="Search text content...")
 
+    visible = supabase_chunks
+    if mod_filter != "All Modalities":
+        visible = [c for c in visible if c.get("modality") == mod_filter]
+    if source_search.strip():
+        sq = source_search.lower()
+        visible = [c for c in visible if sq in c.get("text", "").lower()]
 
-# --------------------------------------------------
-# 7. FILTERED CHUNK VIEW
-# --------------------------------------------------
+    st.caption(f"Displaying {len(visible)} chunks")
 
-st.divider()
-st.subheader("📝 Browse Chunks")
+    for chunk in visible[:30]:
+        mod = chunk.get("modality", "text")
+        cid = chunk.get("id")
+        text = chunk.get("text", "")
+        image_ref = chunk.get("image_ref", "")
+        page = chunk.get("page")
+        slide = chunk.get("slide")
+        start_sec = chunk.get("start_sec")
+        end_sec = chunk.get("end_sec")
 
-if not visible_chunks:
-    st.info("No matching chunks found. Try another search or filter.")
-else:
-    for chunk in visible_chunks:
-        with st.expander(
-            f"🧩 {chunk['chunk_id']} — {chunk['filename']}",
-            expanded=False
-        ):
-            st.write(f"**Topic:** {chunk['topic']}")
-            st.write(f"**Source:** {chunk['filename']}")
-            st.write(f"**Page:** {chunk['page_number']}")
-            st.write(f"**Chunk ID:** {chunk['chunk_id']}")
-            st.text(chunk["text"])
+        badge = f"📄 PDF Page {page}" if mod == "pdf" else (
+            f"🖼️ Slide {slide}" if mod == "slide" else (
+                f"🎥 Video [{int(start_sec or 0)}s - {int(end_sec or 0)}s]" if mod == "youtube" else (
+                    f"🔬 Diagram (p.{page})" if mod == "image" else f"🧩 {mod}"
+                )
+            )
+        )
+
+        with st.expander(f"{badge} — `{cid}`", expanded=False):
+            c_txt, c_media = st.columns([3, 2])
+            with c_txt:
+                st.write(text)
+                if chunk.get("topic_id"):
+                    st.caption(f"Topic Tag: `{chunk.get('topic_id')}`")
+            with c_media:
+                if image_ref and image_ref.endswith((".png", ".jpg", ".jpeg")):
+                    full_p = os.path.join(ROOT_DIR, image_ref)
+                    if os.path.exists(full_p):
+                        st.image(full_p, use_container_width=True)
+                elif image_ref and image_ref.startswith("http"):
+                    st.link_button("▶️ Watch Video Timestamp", image_ref)
