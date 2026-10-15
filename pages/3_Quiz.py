@@ -1,215 +1,260 @@
-import sys
-from pathlib import Path
-from datetime import datetime
+import random
 import streamlit as st
 
-# Ensure repository root is on sys.path for shared imports
-root_path = Path(__file__).resolve().parent.parent
-if str(root_path) not in sys.path:
-    sys.path.insert(0, str(root_path))
-
 from study_data import init_session_state, AVAILABLE_TOPICS, QUESTION_BANK
+from gemini_helper import generate_quiz_questions
 
 st.set_page_config(
-    page_title="Practice Quiz | AI Study Companion",
+    page_title="Quiz | AI Study Companion",
     page_icon="📝",
     layout="wide"
 )
 
 init_session_state()
 
-# --- Page styling ---
-st.markdown("""
-<style>
-.quiz-header-title {
-    font-size: 2rem;
-    font-weight: 700;
-    color: #1e293b;
-    margin-bottom: 0.2rem;
+# Session state
+defaults = {
+    "quiz_questions": [],
+    "quiz_submitted": False,
+    "quiz_answers": {},
+    "quiz_topic": "",
+    "quiz_difficulty": "Easy",
 }
-.score-badge {
-    padding: 20px;
-    border-radius: 14px;
-    text-align: center;
-    margin: 1.5rem 0;
-}
-.score-good { background: #dcfce7; border: 1px solid #86efac; color: #166534; }
-.score-avg  { background: #fef9c3; border: 1px solid #fde047; color: #854d0e; }
-.score-low  { background: #fee2e2; border: 1px solid #fca5a5; color: #991b1b; }
-.review-card {
-    background: #ffffff;
-    border: 1px solid #e2e8f0;
-    border-radius: 12px;
-    padding: 16px 20px;
-    margin-bottom: 12px;
-}
-</style>
-""", unsafe_allow_html=True)
 
-# --- Header ---
-st.markdown('<div class="quiz-header-title">📝 Practice & Assessment Quiz</div>', unsafe_allow_html=True)
-st.caption("Challenge your recall, understand common pitfalls, and measure your concept retention.")
+for key, value in defaults.items():
+    if key not in st.session_state:
+        st.session_state[key] = value
 
-student = st.session_state.get("student_name", "Student")
 
-# --- Quiz Setup Section ---
-with st.container():
-    col1, col2, col3 = st.columns([2, 1, 1], gap="medium")
-    with col1:
-        selected_topic = st.selectbox("Select Study Topic", AVAILABLE_TOPICS)
-    with col2:
-        selected_diff = st.selectbox("Difficulty Level", ["All Difficulties", "Easy", "Medium", "Hard"])
-    with col3:
-        target_count = st.slider("Questions", min_value=3, max_value=5, value=5)
+def get_fallback_questions(topic, count):
+    """Get predefined questions without using an AI API."""
+    bank = QUESTION_BANK.get(topic, [])
 
-# Filter questions based on topic and difficulty
-all_topic_questions = QUESTION_BANK.get(selected_topic, [])
-if selected_diff != "All Difficulties":
-    filtered_questions = [q for q in all_topic_questions if q["difficulty"] == selected_diff]
-    if not filtered_questions:
-        filtered_questions = all_topic_questions
-else:
-    filtered_questions = all_topic_questions
+    if not bank:
+        return []
 
-filtered_questions = filtered_questions[:target_count]
+    questions = []
 
-col_btn1, col_btn2 = st.columns([1, 4])
-with col_btn1:
-    if st.button("🚀 Start New Quiz", use_container_width=True):
-        st.session_state["active_quiz"] = {
-            "topic": selected_topic,
-            "difficulty": selected_diff,
-            "questions": filtered_questions,
-            "submitted": False,
-            "results": None
-        }
-        st.rerun()
+    for item in bank:
+        if not isinstance(item, dict):
+            continue
 
-st.divider()
+        question_text = item.get("question")
+        options = item.get("options")
 
-# --- Active Quiz Session Handling ---
-quiz_state = st.session_state.get("active_quiz")
+        # Support common answer-key formats.
+        answer = item.get("answer", item.get("correct_answer"))
+        explanation = item.get("explanation", "")
 
-if not quiz_state:
-    st.info("Select your topic and settings above, then click **Start New Quiz** to begin.")
-elif quiz_state.get("submitted") and quiz_state.get("results"):
-    # --- Display Evaluation Results ---
-    res = quiz_state["results"]
-    pct = res["percentage"]
+        if not question_text or not isinstance(options, list):
+            continue
 
-    if pct >= 80:
-        badge_class = "score-good"
-        message = "🌟 Excellent mastery! You have a strong grasp of these concepts."
-    elif pct >= 60:
-        badge_class = "score-avg"
-        message = "👍 Good effort! A quick review of the missed points will solidify your knowledge."
+        if len(options) != 4:
+            continue
+
+        # Support answers stored as option indexes.
+        if isinstance(answer, int) and 0 <= answer < len(options):
+            answer = options[answer]
+
+        if isinstance(answer, str) and answer.upper() in ("A", "B", "C", "D"):
+            answer = options[ord(answer.upper()) - ord("A")]
+
+        if answer not in options:
+            continue
+
+        questions.append({
+            "question": question_text,
+            "options": options,
+            "answer": answer,
+            "explanation": explanation,
+        })
+
+    random.shuffle(questions)
+    return questions[:count]
+
+
+st.title("📝 AI Quiz")
+st.write(
+    "Test your knowledge using AI-generated questions "
+    "or built-in practice questions."
+)
+
+selected_topic = st.selectbox("Select Topic", AVAILABLE_TOPICS)
+selected_diff = st.selectbox(
+    "Select Difficulty", ["Easy", "Medium", "Hard"]
+)
+num_questions = st.number_input(
+    "Number of Questions",
+    min_value=1,
+    max_value=10,
+    value=5,
+    step=1
+)
+
+if st.button("Generate Quiz", type="primary"):
+    materials = st.session_state.get("uploaded_materials", [])
+    topic_texts = []
+
+    for material in materials:
+        if not isinstance(material, dict):
+            continue
+
+        material_topic = material.get("topic", "")
+        content = material.get(
+            "extracted_text",
+            material.get("text", material.get("content", ""))
+        )
+
+        if (
+            material_topic == selected_topic
+            and isinstance(content, str)
+            and content.strip()
+        ):
+            topic_texts.append(content.strip())
+
+    study_text = "\n\n".join(topic_texts)
+    questions = []
+    used_fallback = False
+
+    # Try AI first when matching material is available.
+    if study_text:
+        try:
+            with st.spinner("Generating questions with AI..."):
+                questions = generate_quiz_questions(
+                    topic=selected_topic,
+                    study_material=study_text,
+                    num_questions=int(num_questions),
+                    difficulty=selected_diff
+                )
+        except Exception as error:
+            print("AI quiz unavailable; using fallback:", repr(error))
+            used_fallback = True
     else:
-        badge_class = "score-low"
-        message = "📚 Needs review. Revisit lecture notes and ask the AI Tutor for clarification."
+        used_fallback = True
 
-    st.markdown(
-        f"""
-        <div class="score-badge {badge_class}">
-            <h2 style="margin:0;">Score: {res['score']} / {res['total']} ({pct}%)</h2>
-            <p style="margin: 8px 0 0 0; font-size:1.05rem;">{message}</p>
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
+    # If AI is unavailable, use built-in questions.
+    if not questions:
+        questions = get_fallback_questions(
+            selected_topic,
+            int(num_questions)
+        )
+        used_fallback = True
 
-    st.markdown("### 🔍 Question-by-Question Review")
-    for i, item in enumerate(res["eval"]):
-        if item["is_correct"]:
-            st.success(
-                f"**Q{i + 1}: {item['question']}**\n\n"
-                f"✓ Your answer: `{item['chosen']}` (Correct)\n\n"
-                f"*Explanation:* {item['explanation']}"
+    if questions:
+        st.session_state["quiz_questions"] = questions
+        st.session_state["quiz_topic"] = selected_topic
+        st.session_state["quiz_difficulty"] = selected_diff
+        st.session_state["quiz_submitted"] = False
+        st.session_state["quiz_answers"] = {}
+
+        if used_fallback:
+            st.warning(
+                "Built-in practice questions are being used. "
+                "They may not be based on your uploaded PDF."
             )
         else:
-            st.error(
-                f"**Q{i + 1}: {item['question']}**\n\n"
-                f"✗ Your answer: `{item['chosen']}`\n\n"
-                f"**Correct answer:** `{item['correct']}`\n\n"
-                f"*Explanation:* {item['explanation']}"
-            )
+            st.success("AI-generated questions are ready!")
 
-    st.write("")
-    c_act1, c_act2, c_act3 = st.columns(3)
-    with c_act1:
-        if st.button("🔄 Retake or Choose Another Topic", use_container_width=True):
-            st.session_state["active_quiz"] = None
-            st.rerun()
-    with c_act2:
-        if st.button("📊 View Progress on Dashboard", use_container_width=True):
-            st.switch_page("pages/4_Dashboard.py")
-    with c_act3:
-        if st.button("💬 Ask Tutor About Missed Concepts", use_container_width=True):
-            st.switch_page("pages/2_Chat.py")
+    else:
+        st.session_state["quiz_questions"] = []
+        st.session_state["quiz_answers"] = {}
+        st.session_state["quiz_submitted"] = False
 
-else:
-    # --- In-Progress Quiz Form ---
-    active_questions = quiz_state["questions"]
-    st.markdown(f"### 📋 {quiz_state['topic']} Quiz ({len(active_questions)} Questions)")
+        st.error(
+            f"No usable questions found for '{selected_topic}'. "
+            "Check QUESTION_BANK in study_data.py."
+        )
 
-    with st.form("quiz_submission_form"):
+questions = st.session_state.get("quiz_questions", [])
+
+if questions:
+    st.divider()
+    st.subheader(f"Quiz: {st.session_state['quiz_topic']}")
+    st.write(f"Difficulty: {st.session_state['quiz_difficulty']}")
+    st.write(f"Total Questions: {len(questions)}")
+
+    with st.form("quiz_form"):
         user_answers = {}
 
-        for i, q in enumerate(active_questions):
-            st.markdown(f"**Q{i + 1}: {q['question']}**")
-            st.caption(f"Difficulty: {q['difficulty']} • Concept: {q['concept']}")
+        for index, question in enumerate(questions):
+            st.markdown(f"### Question {index + 1}")
+            st.write(question.get("question", "Question unavailable"))
 
-            user_answers[q["id"]] = st.radio(
-                label=f"Options for Q{i + 1}",
-                options=range(len(q["options"])),
-                format_func=lambda idx, opts=q["options"]: opts[idx],
-                key=f"q_radio_{q['id']}",
-                label_visibility="collapsed"
+            options = question.get("options", [])
+
+            if not isinstance(options, list) or not options:
+                st.warning("Options are unavailable.")
+                continue
+
+            user_answers[index] = st.radio(
+                "Choose your answer:",
+                options,
+                key=f"question_{index}",
+                index=None
             )
-            st.write("")
+            st.divider()
 
-        submitted = st.form_submit_button("🏁 Submit Answers & Check Score", use_container_width=True)
+        submitted = st.form_submit_button("Submit Quiz")
 
-        if submitted:
-            correct_count = 0
-            weak_concepts = []
-            detailed_eval = []
+    if submitted:
+        st.session_state["quiz_answers"] = user_answers
+        st.session_state["quiz_submitted"] = True
 
-            for q in active_questions:
-                chosen = user_answers.get(q["id"])
-                is_correct = (chosen == q["answer_index"])
-                if is_correct:
-                    correct_count += 1
-                else:
-                    weak_concepts.append(q["concept"])
+    if st.session_state.get("quiz_submitted"):
+        answers = st.session_state.get("quiz_answers", {})
+        score = 0
+        total = len(questions)
 
-                detailed_eval.append({
-                    "question": q["question"],
-                    "chosen": q["options"][chosen] if chosen is not None else "None",
-                    "correct": q["options"][q["answer_index"]],
-                    "is_correct": is_correct,
-                    "explanation": q["explanation"],
-                    "concept": q["concept"]
-                })
+        st.divider()
+        st.header("📊 Your Results")
 
-            total = len(active_questions)
-            percentage = round((correct_count / total) * 100, 1)
+        for index, question in enumerate(questions):
+            correct_answer = question.get("answer", "")
+            user_answer = answers.get(index)
 
-            # Record quiz attempt
-            quiz_record = {
-                "topic": quiz_state["topic"],
-                "difficulty": quiz_state.get("difficulty", "Standard"),
-                "score": correct_count,
-                "total": total,
-                "percentage": percentage,
-                "date": datetime.now().strftime("%b %d, %Y"),
-                "weak_concepts": weak_concepts
-            }
-            st.session_state["quiz_history"].append(quiz_record)
-            st.session_state["active_quiz"]["submitted"] = True
-            st.session_state["active_quiz"]["results"] = {
-                "score": correct_count,
-                "total": total,
-                "percentage": percentage,
-                "eval": detailed_eval
-            }
+            st.markdown(f"**Question {index + 1}**")
+            st.write(question.get("question", "Question unavailable"))
+
+            if (
+                isinstance(user_answer, str)
+                and isinstance(correct_answer, str)
+                and user_answer.strip().casefold()
+                == correct_answer.strip().casefold()
+            ):
+                score += 1
+                st.success("✅ Correct answer!")
+            else:
+                st.error("❌ Incorrect answer")
+                st.write(f"Your answer: {user_answer or 'Not answered'}")
+                st.info(f"Correct answer: {correct_answer}")
+
+            explanation = question.get("explanation", "")
+            if explanation:
+                st.write(f"💡 Explanation: {explanation}")
+
+            st.divider()
+
+        percentage = (score / total * 100) if total else 0
+
+        st.subheader("🏆 Final Score")
+        col1, col2, col3 = st.columns(3)
+
+        col1.metric("Your Score", f"{score}/{total}")
+        col2.metric("Correct Answers", score)
+        col3.metric("Percentage", f"{percentage:.1f}%")
+
+        st.progress(percentage / 100)
+
+        if percentage >= 80:
+            st.success("🎉 Excellent! You have performed really well!")
+        elif percentage >= 50:
+            st.info("👍 Good job! Keep practising to improve your score.")
+        else:
+            st.warning(
+                "💪 Keep learning! Revise your study material and try again."
+            )
+
+        if st.button("🔄 Retake Quiz"):
+            st.session_state["quiz_submitted"] = False
+            st.session_state["quiz_answers"] = {}
             st.rerun()
